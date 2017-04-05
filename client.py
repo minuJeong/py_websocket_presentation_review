@@ -7,17 +7,16 @@ author: minu jeong
 
 import asyncio
 import websockets
-from threading import Thread
 
 from PyQt5 import QtWidgets
 from PyQt5 import QtCore
 
 
-class NetworkHandler(Thread):
+class NetworkHandler(QtCore.QThread):
 
     PORT = 8765
 
-    server_push = QtCore.pyqtSignal(str)
+    server_push_signal = QtCore.pyqtSignal(str)
 
     _websocket = None
 
@@ -27,9 +26,21 @@ class NetworkHandler(Thread):
             self.connect()
         return self._websocket
 
-    async def listen_server_push(self):
+    async def listen_server_push(self) -> None:
         while True:
-            await self.websocket.recv()
+            server_push_message = await self.websocket.recv()
+            print(f"Server Message: {server_push_message}")
+            self.server_push_signal.emit(server_push_message)
+
+    def run(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+        connect_task = asyncio.ensure_future(self.connect())
+        self.loop.run_until_complete(connect_task)
+
+        listener_task = asyncio.ensure_future(self.listen_server_push())
+        self.loop.run_until_complete(listener_task)
 
     async def connect(self) -> bool:
         print("Attempt to connect..")
@@ -39,14 +50,11 @@ class NetworkHandler(Thread):
         print("Connected!")
         return True
 
-    async def send_message(self, message) -> str:
+    async def send_message(self, message) -> None:
         await self.websocket.send(message)
-        return await self.websocket.recv()
 
     async def close(self) -> None:
-        return await self.websocket.close(
-            reason="actively logged out"
-        )
+        await self.websocket.close(reason="actively logged out")
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -80,35 +88,38 @@ class MainWindow(QtWidgets.QWidget):
         self.setLayout(self.mainlayout)
 
         self.network_handler = NetworkHandler()
+        self.network_handler.server_push_signal.connect(self.on_server_push)
 
-    def try_connect(self, is_checked):
+    def try_connect(self, is_checked) -> None:
         self.connect_btn.setEnabled(False)
-
-        task = asyncio.ensure_future(self.network_handler.connect())
-        asyncio.get_event_loop().run_until_complete(task)
-
+        self.network_handler.start()
         self.send_btn.setEnabled(True)
 
-    def try_send_message(self, is_checked):
+    def try_send_message(self, is_checked) -> None:
         self.send_btn.setEnabled(False)
 
         message = str(self.message_input.text())
         if not message:
             return
 
-        print("Sending Message: {}".format(message))
-
         task = asyncio.ensure_future(self.network_handler.send_message(message))
-        response = asyncio.get_event_loop().run_until_complete(task)
-
-        print("Server Response: {}".format(response))
+        asyncio.get_event_loop().run_until_complete(task)
 
         self.send_btn.setEnabled(True)
 
-    def try_close(self, is_checked):
+    def try_close(self, is_checked) -> None:
+
         task = asyncio.ensure_future(self.network_handler.close())
         asyncio.get_event_loop().run_until_complete(task)
+
         self.close()
+
+    def on_server_push(self, message) -> None:
+        print(f"Server message: {message}")
+
+        history = QtWidgets.QTreeWidgetItem(0)
+        history.setText(0, message)
+        self.history_tree.addTopLevelItem(history)
 
 
 if __name__ == "__main__":
